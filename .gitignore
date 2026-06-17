@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+*.local
+tmp
+output
+outputs
+16-posters-contact-sheet.png
+candidate-posters-review-sheet.png
+焕青计划_16种手艺人格海报_阳光版_v1
