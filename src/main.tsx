@@ -7,10 +7,15 @@ import {
   Camera,
   Check,
   ChevronRight,
+  Copy,
   Download,
   HeartHandshake,
+  MapPin,
+  MessageCircle,
   RefreshCcw,
   Sparkles,
+  Star,
+  Target,
   Users,
 } from 'lucide-react';
 import './styles.css';
@@ -71,6 +76,14 @@ type Question = {
 type Answer = {
   questionIndex: number;
   optionIndex: number;
+};
+
+type Screen = 'home' | 'quiz' | 'reveal' | 'result' | 'gallery';
+
+type EnergyProfile = {
+  hand: number;
+  spark: number;
+  warmth: number;
 };
 
 const results: Result[] = [
@@ -756,6 +769,37 @@ function getImageFor(result: Result) {
   return new URL(result.image, window.location.href).toString();
 }
 
+function getSharedResultFromUrl() {
+  const resultId = new URLSearchParams(window.location.search).get('r') as ResultId | null;
+  return results.find((item) => item.id === resultId) ?? null;
+}
+
+function makeResultUrl(resultId: ResultId) {
+  const url = new URL(window.location.href);
+  url.searchParams.set('r', resultId);
+  return url.toString();
+}
+
+function clampEnergy(value: number) {
+  return Math.max(18, Math.min(98, Math.round(value)));
+}
+
+function buildEnergyProfile(scores: Record<Dimension, number>): EnergyProfile {
+  return {
+    hand: clampEnergy(24 + scores.S * 7 + scores.J * 5 + scores.T * 3),
+    spark: clampEnergy(24 + scores.N * 7 + scores.P * 5 + scores.F * 3),
+    warmth: clampEnergy(24 + scores.E * 6 + scores.F * 6 + scores.S * 2),
+  };
+}
+
+function buildResultEnergy(result: Result): EnergyProfile {
+  const scores = initialScores();
+  [...result.mbti].forEach((dimension) => {
+    scores[dimension as Dimension] = 7;
+  });
+  return buildEnergyProfile(scores);
+}
+
 function calculateResult(answers: Answer[]) {
   const scores = initialScores();
   const tags = new Map<string, number>();
@@ -790,29 +834,67 @@ function calculateResult(answers: Answer[]) {
     .slice(0, 3)
     .map(([tag]) => tag);
 
-  return { result, mbti, scores, topTags };
+  return { result, mbti, scores, topTags, energy: buildEnergyProfile(scores) };
 }
 
 function makeShareText(result: Result) {
-  return `我的手艺人格是「${result.title}」：${result.shareLine} 测测你适合跟哪位乡村工匠老师学一门手艺。`;
+  return `我的手艺人格是「${result.title}」：${result.shareLine} 测测你适合跟哪位乡村工匠老师学一门手艺：${makeResultUrl(result.id)}`;
+}
+
+function makeXiaohongshuText(result: Result) {
+  return `MBTI 测腻了，我测出了自己的手艺人格：${result.title}\n\n${result.shareLine}\n\n本命手艺：${result.crafts.join(' / ')}\n我想从这一步开始：${result.firstStep}\n\n#手艺人格测试 #乡村工匠焕青计划 #跟工匠老师学手艺`;
+}
+
+function makeFriendText(result: Result) {
+  return `我测出来是「${result.title}」。${result.shareLine}\n\n如果逃离城市一天，我适合去学：${result.crafts.join(' / ')}。你也测测你是哪种手艺人格？${makeResultUrl(result.id)}`;
+}
+
+async function copyText(text: string) {
+  try {
+    if (!navigator.clipboard?.writeText) {
+      throw new Error('Clipboard API unavailable');
+    }
+    await navigator.clipboard?.writeText(text);
+  } catch {
+    const textarea = document.createElement('textarea');
+    textarea.value = text;
+    textarea.setAttribute('readonly', 'true');
+    textarea.style.position = 'fixed';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    document.execCommand('copy');
+    textarea.remove();
+  }
+}
+
+function pulseDevice() {
+  navigator.vibrate?.(12);
 }
 
 function App() {
-  const [screen, setScreen] = useState<'home' | 'quiz' | 'reveal' | 'result' | 'gallery'>('home');
+  const sharedResult = useMemo(() => getSharedResultFromUrl(), []);
+  const [screen, setScreen] = useState<Screen>(sharedResult ? 'result' : 'home');
   const [answers, setAnswers] = useState<Answer[]>([]);
+  const [forcedResult, setForcedResult] = useState<Result | null>(sharedResult);
   const [galleryIndex, setGalleryIndex] = useState(0);
+  const [copiedLabel, setCopiedLabel] = useState('');
   const currentQuestion = questions[answers.length];
   const calculation = useMemo(() => calculateResult(answers), [answers]);
-  const result = calculation.result;
+  const result = forcedResult ?? calculation.result;
+  const energy = forcedResult && answers.length === 0 ? buildResultEnergy(forcedResult) : calculation.energy;
   const revealPool = useMemo(() => results.slice().sort(() => 0.5 - Math.random()).slice(0, 7), []);
 
   function startQuiz() {
     setAnswers([]);
+    setForcedResult(null);
     setScreen('quiz');
+    window.history.replaceState(null, '', window.location.pathname);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   function chooseOption(optionIndex: number) {
+    pulseDevice();
     const nextAnswers = [...answers, { questionIndex: answers.length, optionIndex }];
     setAnswers(nextAnswers);
     if (nextAnswers.length >= questions.length) {
@@ -828,11 +910,12 @@ function App() {
       await navigator.share({
         title: `我的手艺人格是${result.title}`,
         text,
-        url: window.location.href,
+        url: makeResultUrl(result.id),
       });
       return;
     }
-    await navigator.clipboard?.writeText(text);
+    await copyText(text);
+    setCopiedLabel('分享文案已复制');
   }
 
   function saveCard() {
@@ -916,6 +999,11 @@ function App() {
               </p>
             </div>
 
+            <div className="home-hook">
+              <Star size={17} />
+              <span>今天不是来被定义，是来抽取你的本命工坊。</span>
+            </div>
+
             <div className="quick-stats" aria-label="测试亮点">
               <span>16 位大师卡</span>
               <span>约 2 分钟</span>
@@ -955,11 +1043,20 @@ function App() {
               <h2>{currentQuestion.title}</h2>
             </div>
 
+            <div className="energy-board" aria-label="工坊能量">
+              <EnergyMeter label="手感" value={energy.hand} />
+              <EnergyMeter label="灵感" value={energy.spark} />
+              <EnergyMeter label="烟火" value={energy.warmth} />
+            </div>
+
             <div className="options-list">
               {currentQuestion.options.map((option, index) => (
                 <button key={option.label} className="choice-card" onClick={() => chooseOption(index)}>
                   <span className="choice-label">{option.label}</span>
-                  <span>{option.text}</span>
+                  <span>
+                    {option.text}
+                    <small>{option.tags.slice(0, 3).join(' / ')}</small>
+                  </span>
                 </button>
               ))}
             </div>
@@ -1006,6 +1103,18 @@ function App() {
                 <strong>{result.shareLine}</strong>
               </section>
 
+              <section className="result-pulse-strip">
+                <div className="pulse-copy">
+                  <span>工坊能量报告</span>
+                  <strong>{(calculation.topTags.length ? calculation.topTags : result.crafts).slice(0, 3).join(' · ')}</strong>
+                </div>
+                <div className="result-energy-grid">
+                  <EnergyMeter label="手感" value={energy.hand} />
+                  <EnergyMeter label="灵感" value={energy.spark} />
+                  <EnergyMeter label="烟火" value={energy.warmth} />
+                </div>
+              </section>
+
               <section className="content-block">
                 <h2>你在工坊里的样子</h2>
                 <p>{result.description}</p>
@@ -1033,6 +1142,71 @@ function App() {
               <section className="content-block action-block">
                 <h2>第一次向工匠老师学习，可以这样开始</h2>
                 <p>{result.firstStep}</p>
+              </section>
+
+              <section className="learning-cta">
+                <div className="learning-head">
+                  <MapPin size={20} />
+                  <div>
+                    <h2>想把测试变成一次真的学习？</h2>
+                    <p>选择一个轻入口，先从尊重地走近一位工匠老师开始。</p>
+                  </div>
+                </div>
+                <div className="learning-routes">
+                  <button
+                    onClick={() => {
+                      copyText(`我想报名一次「${result.title}」方向的周末手艺体验，优先了解：${result.crafts.join(' / ')}。`);
+                      setCopiedLabel('报名意向已复制');
+                    }}
+                  >
+                    <Target size={18} />
+                    周末体验
+                  </button>
+                  <button
+                    onClick={() => {
+                      copyText(`我想成为中国乡村工匠焕青计划青年共创者，方向是「${result.title}」，可以参与记录、共创或传播。`);
+                      setCopiedLabel('共创意向已复制');
+                    }}
+                  >
+                    <HeartHandshake size={18} />
+                    青年共创
+                  </button>
+                  <button
+                    onClick={() => {
+                      copyText(`我想先看「${result.craftGroup}」真实工匠老师的故事，再决定从哪门手艺开始学。`);
+                      setCopiedLabel('故事需求已复制');
+                    }}
+                  >
+                    <BookOpen size={18} />
+                    真实故事
+                  </button>
+                </div>
+              </section>
+
+              <section className="share-kit">
+                <div>
+                  <MessageCircle size={18} />
+                  <h2>帮你写好了分享文案</h2>
+                </div>
+                <button
+                  onClick={async () => {
+                    await copyText(makeXiaohongshuText(result));
+                    setCopiedLabel('小红书文案已复制');
+                  }}
+                >
+                  <Copy size={17} />
+                  复制小红书文案
+                </button>
+                <button
+                  onClick={async () => {
+                    await copyText(makeFriendText(result));
+                    setCopiedLabel('朋友圈文案已复制');
+                  }}
+                >
+                  <Copy size={17} />
+                  复制朋友圈文案
+                </button>
+                {copiedLabel && <p>{copiedLabel}</p>}
               </section>
 
               <section className="partner-row">
@@ -1137,6 +1311,20 @@ function wrapCanvasText(
     }
   });
   context.fillText(line, x, currentY);
+}
+
+function EnergyMeter({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="energy-meter">
+      <div>
+        <span>{label}</span>
+        <strong>{value}</strong>
+      </div>
+      <i>
+        <b style={{ width: `${value}%` }} />
+      </i>
+    </div>
+  );
 }
 
 createRoot(document.getElementById('root')!).render(
